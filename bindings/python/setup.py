@@ -94,7 +94,7 @@ class BuildLibrary(build_ext):
             f'-DLIEF_DIR={self.distribution.lief_dir}',
             f'-DLLVM_DIR={self.distribution.llvm_dir}',
             f'-DClang_DIR={clang_dir.as_posix()}',
-            '-DICDUMP_LLVM=ON',
+            '-DICDUMP_LLVM=OFF',
             '-DICDUMP_PYTHON_BINDINGS=ON',
             f'-DCMAKE_LIBRARY_OUTPUT_DIRECTORY={cmake_library_output_directory}',
             f'-DPython_EXECUTABLE={sys.executable}',

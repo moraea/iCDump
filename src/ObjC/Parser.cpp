@@ -169,12 +169,107 @@ Parser& Parser::process_classes(LIEF::BinaryStream& mstream, LIEF::BinaryStream&
   return *this;
 }
 
+// DYLD_CHAINED_IMPORT
+struct dyld_chained_import
+{
+    uint32_t    lib_ordinal :  8,
+                weak_import :  1,
+                name_offset : 23;
+};
+
+// DYLD_CHAINED_PTR_64
+struct dyld_chained_ptr_64_bind
+{
+    uint64_t    ordinal   : 24,
+                addend    :  8,   // 0 thru 255
+                reserved  : 19,   // all zeros
+                next      : 12,   // 4-byte stride
+                bind      :  1;   // == 1
+};
+
+struct dyld_chained_ptr_64_rebase
+{
+    uint64_t    target    : 36,    // 64GB max image size (DYLD_CHAINED_PTR_64 => vmAddr, DYLD_CHAINED_PTR_64_OFFSET => runtimeOffset)
+                high8     :  8,    // top 8 bits set to this (DYLD_CHAINED_PTR_64 => after slide added, DYLD_CHAINED_PTR_64_OFFSET => before slide added)
+                reserved  :  7,    // all zeros
+                next      : 12,    // 4-byte stride
+                bind      :  1;    // == 0
+};
+
+union dyld_chained_ptr_64 {
+  dyld_chained_ptr_64_bind bind;
+  dyld_chained_ptr_64_rebase rebase;
+  uint64_t combined;
+};
+
+// header of the LC_DYLD_CHAINEfD_FIXUPS payload
+struct dyld_chained_fixups_header
+{
+    uint32_t    fixups_version;    // 0
+    uint32_t    starts_offset;     // offset of dyld_chained_starts_in_image in chain_data
+    uint32_t    imports_offset;    // offset of imports table in chain_data
+    uint32_t    symbols_offset;    // offset of symbol strings in chain_data
+    uint32_t    imports_count;     // number of imported symbol names
+    uint32_t    imports_format;    // DYLD_CHAINED_IMPORT*
+    uint32_t    symbols_format;    // 0 => uncompressed, 1 => zlib compressed
+};
+
 uintptr_t Parser::decode_ptr(uintptr_t ptr) {
   uintptr_t decoded = ptr & ((1llu << 51) - 1);
   if (imagebase_ > 0 && decoded < imagebase_) {
     decoded += imagebase_;
   }
-  //ICDUMP_DEBUG("DECODE(0x{:010x}): 0x{:010x}", ptr, decoded);
+
+  dyld_chained_ptr_64 fixup;
+  if (bin().has_dyld_chained_fixups()) {
+    fixup.combined = ptr;
+    if (fixup.combined & (0xFFFF000000000000)) {
+      if (fixup.bind.bind == 1) {
+        // ICDUMP_DEBUG("FIXED PATH: DECODE(0x{:010x}): dyld_chained_ptr_64_bind.ordinal:  0x{:010x}", ptr, fixup.bind.ordinal);
+        // ICDUMP_DEBUG("FIXED PATH: DECODE(0x{:010x}): dyld_chained_ptr_64_bind.addend:   0x{:010x}", ptr, fixup.bind.addend);
+        // ICDUMP_DEBUG("FIXED PATH: DECODE(0x{:010x}): dyld_chained_ptr_64_bind.reserved: 0x{:010x}", ptr, fixup.bind.reserved);
+        // ICDUMP_DEBUG("FIXED PATH: DECODE(0x{:010x}): dyld_chained_ptr_64_bind.next:     0x{:010x}", ptr, fixup.bind.next);
+        // ICDUMP_DEBUG("FIXED PATH: DECODE(0x{:010x}): dyld_chained_ptr_64_bind.bind:     0x{:010x}", ptr, fixup.bind.bind);
+        auto linkEditSegment = bin().get_segment("__LINKEDIT");
+        size_t linkEditOffset = linkEditSegment->virtual_address() - linkEditSegment->file_offset();
+
+        size_t fixupsHeaderOffset = bin().dyld_chained_fixups()->data_offset() + linkEditOffset;
+        auto fixupsHeader = *(stream().peek<dyld_chained_fixups_header>(fixupsHeaderOffset));
+        // ICDUMP_DEBUG("FIXED PATH: DECODE(0x{:010x}): dyld_chained_fixups_header.symbols_offset: 0x{:010x}", ptr, fixupsHeader.symbols_offset);
+        // ICDUMP_DEBUG("FIXED PATH: DECODE(0x{:010x}): dyld_chained_fixups_header.imports_count:  {}", ptr, fixupsHeader.imports_count);
+        // ICDUMP_DEBUG("FIXED PATH: DECODE(0x{:010x}): dyld_chained_fixups_header.imports_offset: 0x{:010x}", ptr, fixupsHeader.imports_offset);
+
+        dyld_chained_import fixupImport = *(stream().peek<dyld_chained_import>(fixupsHeaderOffset + fixupsHeader.imports_offset 
+                                                                              + (sizeof(dyld_chained_import) * fixup.bind.ordinal)));
+        auto bindSymbolName = *(stream().peek_string_at(fixupsHeaderOffset + fixupsHeader.symbols_offset + fixupImport.name_offset));
+        ICDUMP_WARN("FIXED PATH: DECODE(0x{:010x}): bind symbol: {}", ptr, bindSymbolName);
+        auto symbols = bin().symbols();
+        const auto it_symbol = std::find_if(std::begin(symbols), std::end(symbols),
+                                            [bindSymbolName] (const Symbol& s) {
+                                              return (s.name() == bindSymbolName && s.value() > 0);
+                                            });
+        if (it_symbol == std::end(symbols)) {
+          decoded = 0xFFFFFFFFFFFFFFFF;
+          ICDUMP_WARN("FIXED PATH: DECODE(0x{:010x}): Returning 0x{:010x} for N_UNDF symbol", ptr, decoded);
+          return decoded;
+        }
+        decoded = (*it_symbol).value();
+        ICDUMP_WARN("FIXED PATH: BIND DECODE(0x{:010x}): result = 0x{:010x}", ptr, decoded);
+        return decoded;
+      } else {
+        // ICDUMP_DEBUG("FIXED PATH: DECODE(0x{:010x}): dyld_chained_ptr_64_rebase.target:   0x{:010x}", ptr, fixup.rebase.target);
+        // ICDUMP_DEBUG("FIXED PATH: DECODE(0x{:010x}): dyld_chained_ptr_64_rebase.high8:    0x{:010x}", ptr, fixup.rebase.high8);
+        // ICDUMP_DEBUG("FIXED PATH: DECODE(0x{:010x}): dyld_chained_ptr_64_rebase.reserved: 0x{:010x}", ptr, fixup.rebase.reserved);
+        // ICDUMP_DEBUG("FIXED PATH: DECODE(0x{:010x}): dyld_chained_ptr_64_rebase.next:     0x{:010x}", ptr, fixup.rebase.next);
+        // ICDUMP_DEBUG("FIXED PATH: DECODE(0x{:010x}): dyld_chained_ptr_64_rebase.bind:     0x{:010x}", ptr, fixup.rebase.bind);
+        decoded = imagebase_ + fixup.rebase.target;
+        // ICDUMP_WARN("FIXED PATH: REBASE DECODE(0x{:010x}): result = 0x{:010x}", ptr, decoded);
+        return decoded;
+      }
+    }
+  }
+
+  ICDUMP_DEBUG("BROKEN PATH: DECODE(0x{:010x}): result = 0x{:010x}", ptr, decoded);
   return decoded;
 }
 
