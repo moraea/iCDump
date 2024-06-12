@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.15)
-project(iCDump VERSION 1.0.0 LANGUAGES CXX)
+project(iCDump VERSION 1.0.0 LANGUAGES C CXX)
 if (CMAKE_VERSION VERSION_GREATER_EQUAL "3.24.0")
   cmake_policy(SET CMP0135 NEW)
 endif()

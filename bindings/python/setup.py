@@ -14,7 +14,7 @@ CURRENT_DIR  = Path(__file__).parent
 SOURCE_DIR   = CURRENT_DIR / ".." / ".."
 PACKAGE_NAME = "icdump"
 
-_CURRENT_VERSION = "1.1.0"
+_CURRENT_VERSION = "1.2.0"
 
 def report(*args):
     print(*args)
@@ -94,7 +94,7 @@ class BuildLibrary(build_ext):
             f'-DLIEF_DIR={self.distribution.lief_dir}',
             f'-DLLVM_DIR={self.distribution.llvm_dir}',
             f'-DClang_DIR={clang_dir.as_posix()}',
-            '-DICDUMP_LLVM=OFF',
+            '-DICDUMP_LLVM=ON',
             '-DICDUMP_PYTHON_BINDINGS=ON',
             f'-DCMAKE_LIBRARY_OUTPUT_DIRECTORY={cmake_library_output_directory}',
             f'-DPython_EXECUTABLE={sys.executable}',
@@ -231,8 +231,10 @@ cmdclass = {
 }
 
 setup(
+    name=PACKAGE_NAME,
     distclass=Distribution,
     ext_modules=[Module(PACKAGE_NAME)],
     cmdclass=cmdclass,
     version=version,
+    scripts=['bindings/python/tools/readobjc.py']
 )

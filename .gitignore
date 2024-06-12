@@ -1,2 +1,7 @@
 third-party/LIEF*
 third-party/LLVM*
+.vscode
+build
+dist
+*.egg-info
+icdump*.so
